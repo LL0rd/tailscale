@@ -430,11 +430,6 @@ type Hooks struct {
 	// It runs independently of engine reconfiguration.
 	OnPeerUpdate feature.Hooks[func()]
 
-	// ExitNodePolicyOverrideChange is called with LocalBackend.mu held when
-	// the exit node policy override is set or reset. It may also be called
-	// with an unchanged value when the underlying policy changes.
-	ExitNodePolicyOverrideChange feature.Hooks[func(overridden bool)]
-
 	// OnSelfChange is called (with LocalBackend.mu held) when the self node
 	// changes, including changing to nothing (an invalid view).
 	OnSelfChange feature.Hooks[func(tailcfg.NodeView)]

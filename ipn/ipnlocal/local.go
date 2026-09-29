@@ -461,7 +461,6 @@ type LocalBackend struct {
 	// or when switching profiles, connecting/disconnecting Tailscale, restarting the client,
 	// or on similar events.
 	//
-	// Set through setExitNodePolicyOverrideLocked so extensions are notified.
 	// See tailscale/corp#29969.
 	overrideExitNodePolicy bool
 
@@ -2393,7 +2392,7 @@ func (b *LocalBackend) sysPolicyChanged(policy policyclient.PolicyChange) {
 		// Reset the exit node override if a policy that enforces exit node usage
 		// or allows the user to override automatic exit node selection has changed.
 		b.mu.Lock()
-		b.setExitNodePolicyOverrideLocked(false)
+		b.overrideExitNodePolicy = false
 		b.mu.Unlock()
 	}
 
@@ -5352,16 +5351,16 @@ func (b *LocalBackend) onEditPrefsLocked(_ ipnauth.Actor, mp *ipn.MaskedPrefs, o
 	if oldPrefs.WantRunning() != newPrefs.WantRunning() {
 		// Connecting to or disconnecting from Tailscale clears the override,
 		// unless the user is also explicitly changing the exit node (see below).
-		b.setExitNodePolicyOverrideLocked(false)
+		b.overrideExitNodePolicy = false
 	}
 	if mp.AutoExitNodeSet || mp.ExitNodeIDSet || mp.ExitNodeIPSet {
 		if allowExitNodeOverride, _ := b.polc.GetBoolean(pkey.AllowExitNodeOverride, false); allowExitNodeOverride {
 			// If applying exit node policy settings to the new prefs results in no change,
 			// the user is not overriding the policy. Otherwise, it is an override.
-			b.setExitNodePolicyOverrideLocked(b.applyExitNodeSysPolicyLocked(newPrefs.AsStruct()))
+			b.overrideExitNodePolicy = b.applyExitNodeSysPolicyLocked(newPrefs.AsStruct())
 		} else {
 			// Overrides are not allowed; clear the override flag.
-			b.setExitNodePolicyOverrideLocked(false)
+			b.overrideExitNodePolicy = false
 		}
 	}
 
@@ -7543,19 +7542,6 @@ func (b *LocalBackend) notifyPeerUpdateLocked() {
 	}
 }
 
-// setExitNodePolicyOverrideLocked sets the override and notifies extensions.
-// Notify even if the value is unchanged: the policy itself may have changed.
-// b.mu must be held.
-func (b *LocalBackend) setExitNodePolicyOverrideLocked(overridden bool) {
-	b.overrideExitNodePolicy = overridden
-	if b.shutdownCalled {
-		return
-	}
-	for _, f := range b.extHost.Hooks().ExitNodePolicyOverrideChange {
-		f(overridden)
-	}
-}
-
 // roundTraffic rounds bytes. This is used to preserve user privacy within logs.
 func roundTraffic(bytes int64) float64 {
 	var x float64
@@ -8443,7 +8429,6 @@ func (b *LocalBackend) resetForProfileChangeLocked() error {
 	b.serveConfig = ipn.ServeConfigView{}
 	b.lastSuggestedExitNode = ""
 	b.keyExpired = false
-	b.setExitNodePolicyOverrideLocked(false)
 	b.resetAlwaysOnOverrideLocked()
 	b.extHost.NotifyProfileChange(b.pm.CurrentProfile(), b.pm.CurrentPrefs(), false)
 	b.setAtomicValuesFromPrefsLocked(b.pm.CurrentPrefs())

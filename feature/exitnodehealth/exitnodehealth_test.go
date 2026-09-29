@@ -210,7 +210,7 @@ func TestExitNodeUnavailableWarning(t *testing.T) {
 			}
 
 			_, gotName := evaluateExitNodeStatus(contextFor(b))
-			args := extOf(t, b).warnableArgs(gotReason, gotName, false)
+			args := extOf(t, b).warnableArgs(gotReason, gotName)
 			if gotName != tt.wantName {
 				t.Errorf("exit node name = %q, want %q", gotName, tt.wantName)
 			}
@@ -243,7 +243,7 @@ func TestExitNodeUnavailableWarningNamesDepartedNode(t *testing.T) {
 
 	reason, _ := evaluateExitNodeStatus(contextFor(b))
 	extOf(t, b).mu.Lock()
-	args := extOf(t, b).warnableArgs(reason, extOf(t, b).lastKnownName, false)
+	args := extOf(t, b).warnableArgs(reason, extOf(t, b).lastKnownName)
 	extOf(t, b).mu.Unlock()
 	if reason != ExitNodeNotInTailnet {
 		t.Errorf("reason = %q, want %q", reason, ExitNodeNotInTailnet)
@@ -310,7 +310,7 @@ func TestExitNodeUnavailableWarningPolicyForced(t *testing.T) {
 		t.Fatalf("ExitNodeID = %q; policy did not take effect", got)
 	}
 	reason, name := evaluateExitNodeStatus(contextFor(b))
-	args := extOf(t, b).warnableArgs(reason, name, false)
+	args := extOf(t, b).warnableArgs(reason, name)
 
 	if got := args[ArgExitNodePolicyForced]; got != "true" {
 		t.Errorf("ArgExitNodePolicyForced = %q, want %q", got, "true")
@@ -413,21 +413,22 @@ func TestWarningClears(t *testing.T) {
 
 func TestPolicyArgs(t *testing.T) {
 	tests := []struct {
-		name       string
-		policyKey  pkey.Key
-		overridden bool
+		name        string
+		policyKey   pkey.Key
+		canOverride bool
 	}{
 		{name: "exit-node-id", policyKey: pkey.ExitNodeID},
-		{name: "exit-node-id-overridden", policyKey: pkey.ExitNodeID, overridden: true},
+		{name: "exit-node-id-overridden", policyKey: pkey.ExitNodeID, canOverride: false},
 		{name: "exit-node-ip", policyKey: pkey.ExitNodeIP},
-		{name: "exit-node-ip-overridden", policyKey: pkey.ExitNodeIP, overridden: true},
+		{name: "exit-node-ip-overridden", policyKey: pkey.ExitNodeIP, canOverride: false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			e := &extension{polc: policytest.Config{tt.policyKey: "configured"}}
-			args := e.warnableArgs(ExitNodeNotInTailnet, "missing", tt.overridden)
+			e := &extension{polc: policytest.Config{tt.policyKey: "configured", pkey.AllowExitNodeOverride: tt.canOverride}}
 
-			want := buildfeatures.HasSystemPolicy && !tt.overridden
+			args := e.warnableArgs(ExitNodeNotInTailnet, "missing")
+
+			want := buildfeatures.HasSystemPolicy && !tt.canOverride
 			if got := args[ArgExitNodePolicyForced] == "true"; got != want {
 				t.Errorf("policy forced = %v, want %v", got, want)
 			}
@@ -597,47 +598,6 @@ func TestExitNodeRouteChangesOnNetmapDelta(t *testing.T) {
 		}
 		wantReason(t, b, want)
 	}
-}
-
-func TestPolicyOverrideEvents(t *testing.T) {
-	if !buildfeatures.HasSystemPolicy {
-		t.Skip("system policy omitted")
-	}
-	sys := tsd.NewSystem()
-	sys.PolicyClient.Set(policytest.Config{
-		pkey.ExitNodeID:            "missing",
-		pkey.AllowExitNodeOverride: true,
-	})
-	b := newExitNodeHealthTestBackend(t, sys)
-	wantReason(t, b, ExitNodeNotInTailnet)
-
-	checkOverride := func(want bool) {
-		t.Helper()
-		e := extOf(t, b)
-		e.mu.Lock()
-		defer e.mu.Unlock()
-		if e.policyOverridden != want {
-			t.Errorf("policyOverridden = %v, want %v", e.policyOverridden, want)
-		}
-		if got := e.forcedByPolicy(e.policyOverridden); got != !want {
-			t.Errorf("forcedByPolicy = %v, want %v", got, !want)
-		}
-	}
-	checkOverride(false)
-	if _, err := b.EditPrefs(&ipn.MaskedPrefs{
-		ExitNodeIDSet: true,
-		Prefs:         ipn.Prefs{ExitNodeID: "exit1"},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	checkOverride(true)
-
-	// Disconnecting resets the override, even without changing the selection.
-	if _, err := b.EditPrefs(&ipn.MaskedPrefs{WantRunningSet: true}); err != nil {
-		t.Fatal(err)
-	}
-	checkOverride(false)
-	wantReason(t, b, ExitNodeOK)
 }
 
 // An empty peer list is evidence of a missing exit node only after the node

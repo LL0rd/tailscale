@@ -57,7 +57,6 @@ type extension struct {
 	mu                sync.Mutex
 	state             ipn.State
 	networkConfigured bool
-	policyOverridden  bool
 	closed            bool
 	reason            ExitNodeHealthVerdict // last reported reason, for transition logs
 	lastID            tailcfg.StableNodeID  // last evaluated selection, independent of name caching
@@ -78,7 +77,6 @@ func (e *extension) Init(h ipnext.Host) error {
 	h.Hooks().ProfileStateChange.Add(e.onProfileStateChange)
 	h.Hooks().NetworkConfiguredChange.Add(e.onNetworkConfiguredChange)
 	h.Hooks().OnPeerUpdate.Add(e.onPeerUpdate)
-	h.Hooks().ExitNodePolicyOverrideChange.Add(e.onPolicyOverrideChange)
 	return nil
 }
 
@@ -118,20 +116,12 @@ func (e *extension) onPeerUpdate() {
 	e.updateLocked()
 }
 
-func (e *extension) onPolicyOverrideChange(overridden bool) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.policyOverridden = overridden
-	e.updateLocked()
-}
-
 // healthContext is the extension's input to warning evaluation.
 type healthContext struct {
 	State             ipn.State
 	NetworkConfigured bool
 	Prefs             ipn.PrefsView
 	Peer              tailcfg.NodeView
-	PolicyOverridden  bool
 }
 
 // updateLocked reads the current selection during an extension callback.
@@ -148,7 +138,6 @@ func (e *extension) updateLocked() {
 		NetworkConfigured: e.networkConfigured,
 		Prefs:             prefs,
 		Peer:              peer,
-		PolicyOverridden:  e.policyOverridden,
 	})
 }
 
@@ -294,10 +283,18 @@ func evaluateExitNodeStatus(c healthContext) (ExitNodeHealthVerdict, string) {
 // is mandated by the ExitNodeID or ExitNodeIP policy settings, in which case
 // the user can't fix an unusable exit node themselves.  This affects the
 // string we render in the surfaced health warning.
-func (e *extension) forcedByPolicy(overridden bool) bool {
-	if !buildfeatures.HasSystemPolicy || overridden {
+func (e *extension) forcedByPolicy() bool {
+	if !buildfeatures.HasSystemPolicy {
 		return false
 	}
+
+	// The policy permits switching exit nodes if the forced node is not working.
+	// We assume policies are reasonably static.
+	if v, _ := e.polc.GetBoolean(pkey.AllowExitNodeOverride, false); v {
+		return false
+	}
+
+	// If either ExitNodeID or ExitNodeIP is set, the user cannot fix an unusable exit node themselves.
 	if v, _ := e.polc.GetString(pkey.ExitNodeID, ""); v != "" {
 		return true
 	}
@@ -347,17 +344,17 @@ func (e *extension) updateWarnableLocked(c healthContext) {
 		e.health.SetHealthy(exitNodeUnavailableWarnable)
 		return
 	}
-	e.health.SetUnhealthy(exitNodeUnavailableWarnable, e.warnableArgs(reason, name, c.PolicyOverridden))
+	e.health.SetUnhealthy(exitNodeUnavailableWarnable, e.warnableArgs(reason, name))
 }
 
 // warnableArgs builds the [health.Args] describing an unusable
 // exit node for [exitNodeUnavailableWarnable].
-func (e *extension) warnableArgs(reason ExitNodeHealthVerdict, name string, overridden bool) health.Args {
+func (e *extension) warnableArgs(reason ExitNodeHealthVerdict, name string) health.Args {
 	args := health.Args{ArgExitNodeReason: string(reason)}
 	if name != "" {
 		args[ArgExitNodeName] = name
 	}
-	if e.forcedByPolicy(overridden) {
+	if e.forcedByPolicy() {
 		args[ArgExitNodePolicyForced] = "true"
 	}
 	return args
